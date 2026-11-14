@@ -1,0 +1,5 @@
+/bin/
+/samples/
+*.test
+*.out
+coverage.*
