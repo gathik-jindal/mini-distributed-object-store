@@ -47,6 +47,9 @@ type Membership struct {
 
 	mu      sync.RWMutex
 	workers map[string]*workerState
+	// workers that (re)joined and whose inventory hasn't been verified yet; the
+	// repair loop must not trust or clean up their replica rows until it has
+	reconciling map[string]bool
 
 	OnRevived func(ctx context.Context, workerID string) // reconcile
 	OnChange  func()                                     // wake the repair loop
@@ -58,7 +61,8 @@ type Membership struct {
 
 func NewMembership(cfg config.Config, repo *store.Repo) *Membership {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Membership{cfg: cfg, repo: repo, workers: map[string]*workerState{}, ctx: ctx, cancel: cancel}
+	return &Membership{cfg: cfg, repo: repo, workers: map[string]*workerState{},
+		reconciling: map[string]bool{}, ctx: ctx, cancel: cancel}
 }
 
 // Load restores known workers after a controller restart. We don't know who is
@@ -140,6 +144,14 @@ func (m *Membership) DeadPastGrace(id string) bool {
 		return true
 	}
 	return w.status == Dead && !w.deadSince.IsZero() && time.Since(w.deadSince) >= m.cfg.RepairGrace
+}
+
+// Settled reports whether a worker is ALIVE and its inventory has been verified.
+func (m *Membership) Settled(id string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	w, ok := m.workers[id]
+	return ok && w.status == Alive && !m.reconciling[id]
 }
 
 // LoadMap returns bytes used per worker (for least-loaded placement).
@@ -239,17 +251,26 @@ func (m *Membership) revived(id string) {
 	if w, ok := m.workers[id]; ok {
 		w.needsReconcile = false
 	}
+	if m.OnRevived == nil {
+		m.mu.Unlock()
+		if m.OnChange != nil {
+			m.OnChange()
+		}
+		return
+	}
+	m.reconciling[id] = true
 	m.mu.Unlock()
-	if m.OnRevived != nil {
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
-			m.OnRevived(m.ctx, id)
-		}()
-	}
-	if m.OnChange != nil {
-		m.OnChange()
-	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.OnRevived(m.ctx, id)
+		m.mu.Lock()
+		delete(m.reconciling, id)
+		m.mu.Unlock()
+		if m.OnChange != nil {
+			m.OnChange()
+		}
+	}()
 }
 
 // WaitReconciles blocks until all scheduled reconciliations have finished.

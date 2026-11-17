@@ -22,11 +22,11 @@ import (
 //
 // Each pass, per chunk:
 //   - fewer than RF counted -> copy from a verified good replica to a target:
-//     first overwrite a bad (CORRUPT/MISSING/STALE) copy on an ALIVE worker
+//     first overwrite a bad (CORRUPT/MISSING/STALE) copy on a settled ALIVE worker
 //     in place, otherwise the least-loaded ALIVE worker not holding the chunk.
 //     Replicas on workers dead past the grace period are then marked STALE.
 //   - more than RF good -> trim extras (most-loaded worker first).
-//   - healthy chunk with leftover non-OK rows on ALIVE workers -> drop + delete copy.
+//   - healthy chunk with leftover non-OK rows on settled workers -> drop + delete copy.
 //
 // Reconciliation (a worker (re)joins): diff its verified inventory against the DB.
 
@@ -92,7 +92,7 @@ func (r *Repairer) classify(ch store.Chunk) classified {
 			k.grace = append(k.grace, rep)
 		case rep.State == store.OK && st == Dead:
 			k.deadOld = append(k.deadOld, rep)
-		case (rep.State == store.Corrupt || rep.State == store.Missing || rep.State == store.Stale) && st == Alive:
+		case (rep.State == store.Corrupt || rep.State == store.Missing || rep.State == store.Stale) && m.Settled(rep.WorkerID):
 			k.badAlive = append(k.badAlive, rep)
 		}
 	}
@@ -126,7 +126,12 @@ func (r *Repairer) RunPass(ctx context.Context) (api.RepairSummary, error) {
 		pending[[2]string{p.ChunkID, p.WorkerID}] = true
 	}
 	load := m.LoadMap()
-	alive := m.AliveIDs()
+	var alive []string
+	for _, w := range m.AliveIDs() {
+		if m.Settled(w) {
+			alive = append(alive, w)
+		}
+	}
 	s := api.RepairSummary{ChunksChecked: len(chunks)}
 	var jobs []repairJob
 
