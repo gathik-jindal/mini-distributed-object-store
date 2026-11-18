@@ -95,7 +95,7 @@ title "4. Metadata: custom key/values, update without re-upload"
 META=$(dos upload random-5.5MB.bin -m owner=alice -m project=cloud-course -m version=1 --json | json "d['object_id']")
 run dos meta get "$META"
 before=$(curl -fsS "$DOS_URL/api/v1/objects/$META/metadata" | json "d['last_modified']")
-files_before=$(for w in worker1 worker2 worker3 worker4; do docker exec $w sh -c "ls -l --time-style=+%s \$(find /data/chunks -name '$META-*.bin') 2>/dev/null"; done | md5sum)
+files_before=$(for w in worker1 worker2 worker3 worker4; do docker exec $w sh -c "stat -c '%n %s %Y' \$(find /data/chunks -name '$META-*.bin') 2>/dev/null"; done | md5sum)
 sleep 1
 say "modify: set version=2, add reviewed=true, remove owner"
 run dos meta set "$META" version=2 reviewed=true
@@ -103,7 +103,7 @@ run dos meta rm "$META" owner
 say "raw PATCH via curl (JSON merge-patch)"
 run curl -fsS -X PATCH "$DOS_URL/api/v1/objects/$META/metadata" -H 'Content-Type: application/json' -d '{"status":"approved"}' -o /dev/null -w "HTTP %{http_code}\n"
 after=$(curl -fsS "$DOS_URL/api/v1/objects/$META/metadata" | json "d['last_modified']")
-files_after=$(for w in worker1 worker2 worker3 worker4; do docker exec $w sh -c "ls -l --time-style=+%s \$(find /data/chunks -name '$META-*.bin') 2>/dev/null"; done | md5sum)
+files_after=$(for w in worker1 worker2 worker3 worker4; do docker exec $w sh -c "stat -c '%n %s %Y' \$(find /data/chunks -name '$META-*.bin') 2>/dev/null"; done | md5sum)
 echo "last_modified: $before -> $after"
 [[ "$files_before" == "$files_after" ]] && echo "${G}chunk files untouched: metadata update did not re-upload any data${R}"
 run dos stat "$META"
